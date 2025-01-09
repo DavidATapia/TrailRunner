@@ -1,0 +1,5 @@
+# Ignore build directories
+build/
+
+# Ignore local customizations for Docker Compose
+docker-compose.override.yml

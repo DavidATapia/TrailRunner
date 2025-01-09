@@ -1,0 +1,98 @@
+name: Build OS & Toolchain
+
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [opened, reopened, synchronize, closed]
+    branches: ['main']
+
+concurrency:
+  # group all jobs in same run-id to finish before running jobs on next run-id; cancel pending runs when a PR gets updated.
+  group: ${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  buildArtifacts:
+    name: Build OS & toolchain packages
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Docker login
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Make Docker build image
+        uses: docker/bake-action@v4      
+        with:
+          load: true  # store built image locally into Docker
+          set: |      # build args needed by docker/bake-action@ but normally exported in 'up.sh'
+            *.args.DEV_USER=runner
+            *.args.USER_ID=1000
+            *.no-cache=true
+      - name: Prepare Container for Docker Volume Mounts
+        shell: bash
+        run: |
+          mkdir -p ./build/downloads
+          mkdir -p ./build/sstate-cache
+      - name: Set github url and credentials to retrieve private repositories
+        run: |
+          export HOME=/home/runner/actions-runner/_work/yocto-builder/yocto-builder/
+          git config --global --add url."https://${{ secrets.SITE_GH_AUTH_RO }}:x-oauth-basic@github.com/DavidATapia".insteadOf ssh://git@github.com/DavidATapia
+          git config --global --add url."https://${{ secrets.SITE_GH_AUTH_RO }}:x-oauth-basic@github.com/DavidATapia".insteadOf git@github.com/DavidATapia
+      - name: Launch build container
+        shell: bash
+        run: |
+          ./up.sh
+      - name: Build OS/toolchain pair for Jetson Xavier NX emmc
+        shell: bash
+        run: |
+          docker compose exec yocto-dev bash -c "GITHUB_ACTIONS=true GITCONFIG_FILE=/workspaces/.gitconfig kas build kas/sato-xavier-nx-emmc.yml"
+          docker compose exec yocto-dev bash -c "GITHUB_ACTIONS=true GITCONFIG_FILE=/workspaces/.gitconfig kas build kas/sato-xavier-nx-emmc.yml -c populate_sdk"
+      - name: Upload OS/toolchain artifacts to job artifact storage
+        id: upload-artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-n-sdk-${{ github.sha }}.zip
+          path: |
+            ./build/tmp/deploy/images/jetson-xavier-nx-devkit-emmc/core-image-sato-jetson-xavier-nx-devkit-emmc.tegraflash.tar.gz
+            ./build/tmp/deploy/sdk/poky-glibc-x86_64-core-image-sato-armv8a-jetson-xavier-nx-devkit-emmc-toolchain-4.0.20.sh
+          if-no-files-found: error
+          retention-days: 2
+      # always run this cleanup step, even if a previous step fails
+      - name: Cleanup
+        if: always()
+        shell: bash
+        run: |
+          ./down.sh
+          docker image rm local-yocto:latest || true
+          export HOME=/home/runner/actions-runner/_work/yocto-builder/yocto-builder/
+          git config --global --remove-section url."https://${{ secrets.SITE_GH_AUTH_RO }}:x-oauth-basic@github.com/DavidATapia"
+  testArtifacts:
+    name: HWiL testing (NOT YET IMPLEMENTED)
+    needs: buildArtifacts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Flash images to hardware (NOT YET IMPLEMENTED)
+        if: false
+        shell: bash
+        run: |
+          echo "NOT YET IMPLEMENTED"
+  publishArtifacts:
+    name: Publish artifacts
+    needs: [buildArtifacts, testArtifacts]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish artifacts to Sharepoint
+        if: github.event.pull_request.merged
+        uses: DavidATapia/Push2Sharepoint@main
+        with:
+          username: ${{ secrets.SHAREPOINT_LOGIN_ID }}
+          password: ${{ secrets.SHAREPOINT_LOGIN_PW }}
+          file_name: "./build/tmp/deploy/images/jetson-xavier-nx-devkit-emmc/core-image-sato-jetson-xavier-nx-devkit-emmc.tegraflash.tar.gz"
+          full_url: "https://davidatapia.sharepoint.com/sites/Yocto_build_dev"
+          target_subfolder: "Shared Documents/test-builds/"

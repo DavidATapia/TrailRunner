@@ -1,0 +1,38 @@
+# https://docs.docker.com/compose/compose-file/compose-file-v3/
+# https://docs.docker.com/compose/reference/
+
+# Unassigned variables takes values from the host and passes to the container
+x-common-variables: &common-variables
+  COLUMNS:
+  USER:
+  DISPLAY:
+
+services:
+  android-studio-dev:
+    cpuset: "0-$NPROC"
+    privileged: true
+    image: local-android-studio
+    build:
+      context: .
+      args:
+        DEV_USER: $USER
+        USER_ID: $UID
+    tty: true
+    hostname: android-studio-builder
+    container_name: android-studio-dev-env
+    volumes:
+      - /dev/bus/usb:/dev/bus/usb
+      - /tmp/.X11-unix:/tmp/.X11-unix
+      - /etc/localtime:/etc/localtime:ro
+      - ~/.ssh/:/home/$USER/.ssh:rw
+      - ./:/workspaces:rw
+      - downloads:/workspaces/build/downloads
+      - sstate-cache:/workspaces/build/sstate-cache
+    environment:
+      <<: *common-variables
+    working_dir: "/workspaces"
+
+# persistent volumes shared across any container, but not the host
+volumes:
+  downloads:
+  sstate-cache:
